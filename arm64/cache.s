@@ -31,6 +31,56 @@ TEXT ·cache_enable(SB),$0
 	ISB	SY
 	RET
 
+// func dcache_invalidate_all()
+//
+// Invalidate every level of data or unified cache below the Level of Coherency
+// by set/way. Set/way maintenance does not depend on the MMU and must run
+// before the data cache is enabled, as lines left behind by firmware or by a
+// previous OS otherwise shadow memory this image has already written.
+TEXT ·dcache_invalidate_all(SB),NOSPLIT,$0
+	DSB	SY
+	MRS	CLIDR_EL1, R10
+	LSR	$24, R10, R11
+	AND	$7, R11, R11		// R11 = Level of Coherency
+	CBZ	R11, inv_finished
+	MOVD	$0, R0			// R0 = cache level (0-based)
+inv_loop_level:
+	LSL	$1, R0, R14
+	ADD	R0, R14, R14		// R14 = 3 * level
+	LSR	R14, R10, R12
+	AND	$7, R12, R12		// R12 = cache type at this level
+	CMP	$2, R12
+	BLT	inv_skip		// < 2: no data or unified cache here
+	LSL	$1, R0, R14		// R14 = level << 1 = CSSELR value (data cache)
+	MSR	R14, CSSELR_EL1
+	ISB	SY
+	MRS	CCSIDR_EL1, R12
+	AND	$7, R12, R2
+	ADD	$4, R2, R2		// R2 = log2(line bytes) = set-field shift
+	UBFX	$3, R12, $10, R3	// R3 = associativity - 1 (max way)
+	CLZW	R3, R4			// R4 = way-field shift
+	UBFX	$13, R12, $15, R5	// R5 = number of sets - 1 (max set)
+inv_loop_way:
+	MOVD	R5, R6			// R6 = set index, from max down to 0
+inv_loop_set:
+	LSL	R4, R3, R7		// R7 = way << way_shift
+	ORR	R14, R7, R7		// R7 |= level << 1
+	LSL	R2, R6, R8		// R8 = set << set_shift
+	ORR	R8, R7, R9		// R9 = set/way/level operand
+	WORD	$0xd5087649		// dc isw, x9
+	SUBS	$1, R6, R6		// set--
+	BGE	inv_loop_set
+	SUBS	$1, R3, R3		// way--
+	BGE	inv_loop_way
+inv_skip:
+	ADD	$1, R0, R0		// level++
+	CMP	R11, R0
+	BLT	inv_loop_level
+inv_finished:
+	DSB	SY
+	ISB	SY
+	RET
+
 // The range operations take the line aligned base address and the number of
 // consecutive lines to maintain, as computed by cachemath.LineSpan. The count
 // is tested first so that an empty range maintains no line. The stride comes

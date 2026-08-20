@@ -20,6 +20,7 @@ import (
 // host.
 func cache_enable()
 func cache_disable()
+func dcache_invalidate_all()
 func clean_data_cache_range(first, n uintptr)
 func invalidate_data_cache_range(first, n uintptr)
 func flush_data_cache_range(first, n uintptr)
