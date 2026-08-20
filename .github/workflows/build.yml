@@ -1,6 +1,18 @@
 name: Build
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      softfloat_ref:
+        description: >-
+          Commit or branch of abarisani/tamago-go to build the soft-float
+          compiler from. Pinned by default: the soft-float work lives on an
+          untagged branch, so tracking it would let someone else's push break
+          this run.
+        required: false
+        default: 37aa6e92d3f7474c62e92471323d58b4c8e791d0
 
 jobs:
   test:
@@ -85,6 +97,61 @@ jobs:
             for arch in amd64 arm arm64 riscv64 loong64; do
               GOARCH=$arch $go build ./$board 2>&1 | sed "s/^/     $arch: /"
             done
+            rc=1
+          fi
+        done
+        exit $rc
+
+  # Soft-float riscv64, run by hand only (workflow_dispatch), never on push.
+  #
+  # The AI Foundry boards are built with a separate compiler branch, not with a
+  # tamago-go release: the ET-Minion is rv64imfc and has no d extension, so it
+  # needs GOSOFT=1 (see board/aifoundry/sys_emu/README.md). runtime.GetG has a
+  # different signature there than in any release, which means a change to
+  # soc/aifoundry can build clean on every matrix entry above and still break
+  # the compiler these boards actually ship with.
+  #
+  # It is manual because the compiler is an untagged branch on a personal fork.
+  # Gating pushes on a ref that can move or vanish trades a real failure signal
+  # for a fake one. Run it when touching soc/aifoundry or riscv64.
+  softfloat:
+    name: Soft-float riscv64 boards (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    env:
+      SOFTFLOAT_REF: ${{ inputs.softfloat_ref }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Cache the soft-float compiler
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: tamago-softfloat
+        key: softfloat-${{ inputs.softfloat_ref }}-${{ runner.os }}
+    - uses: actions/setup-go@v7
+      if: steps.cache.outputs.cache-hit != 'true'
+      with:
+        go-version: '1.26'
+        cache: false
+    - name: Compile the soft-float compiler
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: |
+        git clone https://github.com/abarisani/tamago-go.git tamago-softfloat
+        cd tamago-softfloat && git checkout --detach "${SOFTFLOAT_REF}"
+        cd src && ./make.bash
+    - name: Build the boards that use it
+      run: |
+        export GOROOT=$PWD/tamago-softfloat
+        export GOOSPKG=github.com/usbarmory/tamago
+        export GOOS=tamago GOARCH=riscv64 GOSOFT=1
+        export CGO_ENABLED=0 GO_EXTLINK_ENABLED=0 GOTOOLCHAIN=local
+        rc=0
+        for board in board/aifoundry/*; do
+          [ -d "$board" ] || continue
+          if $GOROOT/bin/go build ./$board; then
+            echo "ok   $board"
+          else
+            echo "FAIL $board"
             rc=1
           fi
         done
