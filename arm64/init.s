@@ -20,6 +20,10 @@ TEXT cpuinit(SB),NOSPLIT|NOFRAME,$0
 	CMP	$1, R0
 	BEQ	init
 
+	// EL2 (e.g. the Raspberry Pi firmware enters the kernel at EL2)
+	CMP	$2, R0
+	BEQ	from_el2
+
 	// While tamago has been tested in Secure EL3, we drop to Non-secure
 	// EL1 to ease chain loading from TF-A or bootloaders, as on AArch64
 	// the OS is expected to run at this level.
@@ -54,6 +58,34 @@ TEXT cpuinit(SB),NOSPLIT|NOFRAME,$0
 	WORD	$0xd51e4020	// msr ELR_EL3, x0
 	ISB	SY
 	ERET
+
+from_el2:
+	// D12.2.44 HCR_EL2, Hypervisor Configuration Register
+	MOVD	$(1<<31), R1	// set EL1 level as AArch64
+	WORD	$0xd51c1101	// msr hcr_el2, x1
+	ISB	SY
+
+	// D12.2.25 CNTHCTL_EL2, Counter-timer Hypervisor Control register
+	MOVD	$3, R1		// enable EL1 physical timer access
+	WORD	$0xd51ce101	// msr cnthctl_el2, x1
+
+	// D12.2.26 CNTVOFF_EL2, Counter-timer Virtual Offset register
+	//
+	// CNTVOFF_EL2 is S3_4_C14_C0_3, the neighbouring op2=2 encoding is
+	// unallocated and traps to the EL2 vector before one is installed.
+	MOVD	$0, R1
+	WORD	$0xd51ce061	// msr cntvoff_el2, x1
+
+	// C5.2.19 SPSR_EL2, Saved Program Status Register (EL2)
+	MOVD	$0x3c5, R1	// EL1h, DAIF masked
+	WORD	$0xd51c4001	// msr spsr_el2, x1
+
+	// drop to EL1
+	MOVD	$·cpuinit_el1(SB), R1
+	WORD	$0xd51c4021	// msr elr_el2, x1
+	ISB	SY
+	ERET
+
 init:
 	B	·cpuinit_el1(SB)
 
