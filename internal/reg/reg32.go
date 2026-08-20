@@ -141,3 +141,15 @@ func WaitSignal(exit chan struct{}, addr uint32, pos int, mask int, val uint32) 
 
 	return true
 }
+
+// Read32At and Write32At access a 32-bit register at a 64-bit address (e.g. a
+// GIC above 4 GiB), on 32-bit targets an address above 4 GiB truncates.
+func Read32At(addr uint64) uint32 {
+	reg := (*uint32)(unsafe.Pointer(uintptr(addr)))
+	return atomic.LoadUint32(reg)
+}
+
+func Write32At(addr uint64, val uint32) {
+	reg := (*uint32)(unsafe.Pointer(uintptr(addr)))
+	atomic.StoreUint32(reg, val)
+}
