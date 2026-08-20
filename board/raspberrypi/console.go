@@ -1,12 +1,12 @@
 // Raspberry Pi support for tamago/arm
 // https://github.com/usbarmory/tamago
 //
-// Copyright (c) The TamaGo Authors. All Rights Reserved.
+// Copyright (c) the pi package authors
 //
 // Use of this source code is governed by the license
 // that can be found in the LICENSE file.
 
-//go:build !linkprintk
+//go:build !linkprintk && arm
 
 package pi
 
