@@ -107,4 +107,16 @@ TEXT ·cpuinit_el1(SB),NOSPLIT|NOFRAME,$0
 	ADD	R1, RSP
 	SUB	R2, RSP
 
+	// zero the BSS ([runtime.bss, runtime.end), doubleword aligned), as a
+	// raw image loader copies text and data only
+	MOVD	$runtime·bss(SB), R0
+	MOVD	$runtime·end(SB), R1
+bss_zero:
+	CMP	R1, R0
+	BHS	bss_done
+	MOVD	ZR, (R0)
+	ADD	$8, R0, R0
+	B	bss_zero
+bss_done:
+
 	B	_rt0_tamago_start(SB)
