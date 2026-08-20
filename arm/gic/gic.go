@@ -14,8 +14,9 @@
 // The driver is based on the following reference specifications:
 //   - ARM IHI 0048B.b - ARM Generic Interrupt Controller - Architecture version 2.0
 //
-// This package is only meant to be used with `GOOS=tamago GOARCH=arm` as
-// supported by the TamaGo framework for bare metal Go, see
+// GICv2 is not specific to 32-bit ARM, arm64 parts ship it as well, therefore
+// this package is meant to be used with `GOOS=tamago` on both `GOARCH=arm` and
+// `GOARCH=arm64` as supported by the TamaGo framework for bare metal Go, see
 // https://github.com/usbarmory/tamago.
 package gic
 
@@ -26,7 +27,8 @@ import (
 // GICv2 registers
 const (
 	// GIC offsets in Cortex-A7
-	// (p178, Table 8-1, Cortex-A7 MPCore Technical Reference Manual).
+	// (p178, Table 8-1, Cortex-A7 MPCore Technical Reference Manual),
+	// a GIC-400 uses the same layout.
 	GICD_OFF = 0x1000
 	GICC_OFF = 0x2000
 
@@ -67,12 +69,37 @@ const (
 
 // GIC represents a Generic Interrupt Controller (GICv2) instance.
 type GIC struct {
-	// Base register
-	Base uint32
+	// Base register, 64-bit as a GICv2 is not necessarily addressable in 32
+	// bits (e.g. the BCM2712 places its GIC-400 above 4 GiB).
+	Base uint64
 
 	// control registers
-	gicd uint32
-	gicc uint32
+	gicd uint64
+	gicc uint64
+}
+
+// set writes a single bit of a 32-bit register at a 64-bit address.
+func set(addr uint64, pos int, val bool) {
+	r := reg.Read32At(addr)
+
+	if val {
+		r |= 1 << pos
+	} else {
+		r &^= 1 << pos
+	}
+
+	reg.Write32At(addr, r)
+}
+
+// getN reads a masked field of a 32-bit register at a 64-bit address.
+func getN(addr uint64, pos int, mask int) uint32 {
+	return (reg.Read32At(addr) >> pos) & uint32(mask)
+}
+
+// lines returns the number of 32-interrupt blocks the distributor implements,
+// counting the block of 32 internal (SGI and PPI) interrupts.
+func (hw *GIC) lines() uint64 {
+	return uint64(getN(hw.gicd+GICD_TYPER, TYPER_ITLINES, 0x1f)) + 1
 }
 
 // InitGIC initializes an ARM Generic Interrupt Controller (GICv2) instance.
@@ -84,49 +111,43 @@ func (hw *GIC) Init() {
 	hw.gicd = hw.Base + GICD_OFF
 	hw.gicc = hw.Base + GICC_OFF
 
-	// Get the maximum number of external interrupt lines
-	itLinesNum := reg.GetN(hw.gicd+GICD_TYPER, TYPER_ITLINES, 0x1f)
-
-	// Add a line for the 32 internal interrupts
-	itLinesNum += 1
-
-	for n := uint32(0); n < itLinesNum; n++ {
+	for n := uint64(0); n < hw.lines(); n++ {
 		// Disable interrupts
 		addr := hw.gicd + GICD_ICENABLER + 4*n
-		reg.Write(addr, 0xffffffff)
+		reg.Write32At(addr, 0xffffffff)
 
 		// Clear pending interrupts
 		addr = hw.gicd + GICD_ICPENDR + 4*n
-		reg.Write(addr, 0xffffffff)
+		reg.Write32At(addr, 0xffffffff)
 
 		// Group 0 (Secure)
 		addr = hw.gicd + GICD_IGROUPR + 4*n
-		reg.Write(addr, 0x00000000)
+		reg.Write32At(addr, 0x00000000)
 	}
 
 	// Set priority mask to allow Non-Secure world to use the lower half
 	// of the priority range.
-	reg.Write(hw.gicc+GICC_PMR, 0x80)
+	reg.Write32At(hw.gicc+GICC_PMR, 0x80)
 
-	reg.Clear(hw.gicc+GICC_CTLR, CTLR_FIQEN)
+	set(hw.gicc+GICC_CTLR, CTLR_FIQEN, false)
 
-	reg.Set(hw.gicc+GICC_CTLR, CTLR_ENABLEGRP1)
-	reg.Set(hw.gicc+GICC_CTLR, CTLR_ENABLEGRP0)
+	set(hw.gicc+GICC_CTLR, CTLR_ENABLEGRP1, true)
+	set(hw.gicc+GICC_CTLR, CTLR_ENABLEGRP0, true)
 
-	reg.Set(hw.gicd+GICD_CTLR, CTLR_ENABLEGRP1)
-	reg.Set(hw.gicd+GICD_CTLR, CTLR_ENABLEGRP0)
+	set(hw.gicd+GICD_CTLR, CTLR_ENABLEGRP1, true)
+	set(hw.gicd+GICD_CTLR, CTLR_ENABLEGRP0, true)
 }
 
 // FIQEn controls whether Group 0 (Secure) interrupts should be signalled as
 // IRQ or FIQ requests.
 func (hw *GIC) FIQEn(fiq bool) {
-	reg.SetTo(hw.gicc+GICC_CTLR, CTLR_FIQEN, fiq)
+	set(hw.gicc+GICC_CTLR, CTLR_FIQEN, fiq)
 }
 
 func (hw *GIC) irq(m int, enable bool) {
 	addr := hw.gicd
 
-	n := uint32(m / 32)
+	n := uint64(m / 32)
 	i := m % 32
 
 	if enable {
@@ -137,7 +158,7 @@ func (hw *GIC) irq(m int, enable bool) {
 
 	// ISENABLER and ICENABLER are write-1-to-act, a read-modify-write would
 	// act on every other set bit as well.
-	reg.Write(addr+4*n, 1<<i)
+	reg.Write32At(addr+4*n, 1<<i)
 }
 
 // EnableInterrupt enables forwarding of the corresponding interrupt to the CPU
@@ -154,22 +175,22 @@ func (hw *GIC) DisableInterrupt(id int) {
 
 // GetInterrupt obtains and acknowledges a signaled interrupt.
 func (hw *GIC) GetInterrupt() (id int) {
-	m := reg.GetN(hw.gicc+GICC_IAR, IAR_ID, 0x3ff)
+	m := getN(hw.gicc+GICC_IAR, IAR_ID, 0x3ff)
 
 	if m < 1020 {
-		reg.Write(hw.gicc+GICC_EOIR, (m&0x3ff)<<EOIR_ID)
+		reg.Write32At(hw.gicc+GICC_EOIR, (m&0x3ff)<<EOIR_ID)
 	}
 
 	return int(m)
 }
 
-// GetInterrupt obtains and acknowledges a signaled Non-Secure interrupt from
-// Secure access.
+// GetNonSecureInterrupt obtains and acknowledges a signaled Non-Secure
+// interrupt from Secure access.
 func (hw *GIC) GetNonSecureInterrupt() (id int) {
-	m := reg.GetN(hw.gicc+GICC_AIAR, AIAR_ID, 0x3ff)
+	m := getN(hw.gicc+GICC_AIAR, AIAR_ID, 0x3ff)
 
 	if m < 1020 {
-		reg.Write(hw.gicc+GICC_AEOIR, (m&0x3ff)<<AEOIR_ID)
+		reg.Write32At(hw.gicc+GICC_AEOIR, (m&0x3ff)<<AEOIR_ID)
 	}
 
 	return int(m)
@@ -178,10 +199,10 @@ func (hw *GIC) GetNonSecureInterrupt() (id int) {
 // SetInterruptGroup assigns the corresponding interrupt to either Group 0
 // (Secure, false) or 1 (Non-Secure, true).
 func (hw *GIC) SetInterruptGroup(id int, status bool) {
-	n := uint32(id / 32)
+	n := uint64(id / 32)
 	i := id % 32
 
-	reg.SetTo(hw.gicd+GICD_IGROUPR+4*n, i, status)
+	set(hw.gicd+GICD_IGROUPR+4*n, i, status)
 }
 
 // SetInterruptsGroup assigns all interrupts to either Group 0 (Secure, false)
@@ -190,19 +211,12 @@ func (hw *GIC) SetInterruptsGroup(status bool) {
 	// Group 0 (Secure)
 	mask := uint32(0x00000000)
 
-	// Get the maximum number of external interrupt lines
-	itLinesNum := reg.GetN(hw.gicd+GICD_TYPER, TYPER_ITLINES, 0x1f)
-
-	// Add a line for the 32 internal interrupts
-	itLinesNum += 1
-
 	if status {
 		// Group 1 (Non-Secure)
 		mask = 0xffffffff
 	}
 
-	for n := uint32(0); n < itLinesNum; n++ {
-		addr := hw.gicd + GICD_IGROUPR + 4*n
-		reg.Write(addr, mask)
+	for n := uint64(0); n < hw.lines(); n++ {
+		reg.Write32At(hw.gicd+GICD_IGROUPR+4*n, mask)
 	}
 }
