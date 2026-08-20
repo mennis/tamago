@@ -46,6 +46,15 @@ const (
 	GICD_ICENABLER = 0x180
 	GICD_ICPENDR   = 0x280
 
+	// 1 byte per interrupt
+	GICD_IPRIORITYR = 0x400
+	GICD_ITARGETSR  = 0x800
+
+	// 2 bits per interrupt, bit[1] selects edge-triggered
+	GICD_ICFGR    = 0xc00
+	ICFGR_EDGE    = 1
+	ICFGR_PER_REG = 16
+
 	// CPU interface register map
 	// (p76, Table 4-2, ARM Generic Interrupt Controller Architecture Specification).
 	GICC_CTLR  = 0x0000
@@ -66,6 +75,10 @@ const (
 	GICC_AEOIR = 0x0024
 	AEOIR_ID   = 0
 )
+
+// SPI is the first Shared Peripheral Interrupt ID, the SGIs and PPIs below it
+// have read-only target and configuration fields.
+const SPI = 32
 
 // GIC represents a Generic Interrupt Controller (GICv2) instance.
 type GIC struct {
@@ -219,4 +232,76 @@ func (hw *GIC) SetInterruptsGroup(status bool) {
 	for n := uint64(0); n < hw.lines(); n++ {
 		reg.Write32At(hw.gicd+GICD_IGROUPR+4*n, mask)
 	}
+}
+
+// SetPriorityMask sets the CPU interface priority mask, only interrupts of
+// numerically lower priority than the mask are signalled. [GIC.Init] leaves it
+// at 0x80, the lower half of the priority range.
+func (hw *GIC) SetPriorityMask(prio uint8) {
+	reg.Write32At(hw.gicc+GICC_PMR, uint32(prio))
+}
+
+// SetInterruptPriority sets the priority of the corresponding interrupt,
+// numerically lower is higher priority.
+func (hw *GIC) SetInterruptPriority(id int, prio uint8) {
+	addr := hw.gicd + GICD_IPRIORITYR + 4*uint64(id/4)
+	pos := 8 * (id % 4)
+
+	r := reg.Read32At(addr)
+	r &^= 0xff << pos
+	r |= uint32(prio) << pos
+
+	reg.Write32At(addr, r)
+}
+
+// SetInterruptsPriority sets the priority of every interrupt.
+func (hw *GIC) SetInterruptsPriority(prio uint8) {
+	mask := uint32(prio)
+	mask |= mask << 8
+	mask |= mask << 16
+
+	// 4 interrupts per register
+	for n := uint64(0); n < hw.lines()*32/4; n++ {
+		reg.Write32At(hw.gicd+GICD_IPRIORITYR+4*n, mask)
+	}
+}
+
+// SetInterruptTarget sets the CPU interfaces, as a bitmask of up to 8 targets,
+// the corresponding interrupt is forwarded to. Only SPIs can be targeted.
+func (hw *GIC) SetInterruptTarget(id int, targets uint8) {
+	addr := hw.gicd + GICD_ITARGETSR + 4*uint64(id/4)
+	pos := 8 * (id % 4)
+
+	r := reg.Read32At(addr)
+	r &^= 0xff << pos
+	r |= uint32(targets) << pos
+
+	reg.Write32At(addr, r)
+}
+
+// SetInterruptsTarget sets the CPU interfaces, as a bitmask of up to 8
+// targets, every SPI is forwarded to.
+func (hw *GIC) SetInterruptsTarget(targets uint8) {
+	mask := uint32(targets)
+	mask |= mask << 8
+	mask |= mask << 16
+
+	// 4 interrupts per register, skipping the read-only SGI and PPI fields
+	for n := uint64(SPI / 4); n < hw.lines()*32/4; n++ {
+		reg.Write32At(hw.gicd+GICD_ITARGETSR+4*n, mask)
+	}
+}
+
+// SetInterruptConfig configures the corresponding interrupt as edge-triggered
+// (true) or level-sensitive (false). Only SPIs can be configured.
+//
+// [GIC.Init] leaves the configuration as found, a mismatch is silent: an edge
+// source configured as level never clears, a level source configured as edge
+// yields no edge when it is already asserted at unmask time and therefore
+// never delivers its first interrupt.
+func (hw *GIC) SetInterruptConfig(id int, edge bool) {
+	addr := hw.gicd + GICD_ICFGR + 4*uint64(id/ICFGR_PER_REG)
+	pos := 2*(id%ICFGR_PER_REG) + ICFGR_EDGE
+
+	set(addr, pos, edge)
 }
