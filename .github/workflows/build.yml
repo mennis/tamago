@@ -1,0 +1,91 @@
+name: Build
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Host tests (Go ${{ matrix.go }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # the oldest release go.mod permits, and the newest available
+        go: ['1.26.5', 'stable']
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-go@v7
+      with:
+        go-version: ${{ matrix.go }}
+        # tamago has no module dependencies, so there is no go.sum to key a
+        # module cache on
+        cache: false
+    - name: Run tests for packages buildable on the host
+      run: |
+        set -e
+        pkgs=""
+        for pkg in $(find . -name '*_test.go' | xargs -n1 dirname | sort -u); do
+          if go build "$pkg" >/dev/null 2>&1; then
+            pkgs="$pkgs $pkg"
+          else
+            echo "skipping $pkg, it does not build for the host toolchain"
+          fi
+        done
+        [ -n "$pkgs" ] || { echo "no testable package found"; exit 1; }
+        go vet $pkgs
+        go test -v $pkgs
+
+  build:
+    name: Board support packages (${{ matrix.tamago }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # every TamaGo compiler release the go.mod directive permits
+        tamago: [tamago-go1.26.5, tamago-go1.26.6]
+    env:
+      TAMAGO_VERSION: ${{ matrix.tamago }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Cache the TamaGo compiler
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: tamago-go
+        key: ${{ matrix.tamago }}-${{ runner.os }}
+    - uses: actions/setup-go@v7
+      if: steps.cache.outputs.cache-hit != 'true'
+      with:
+        go-version: '1.26'
+        cache: false
+    - name: Compile the TamaGo compiler
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: |
+        wget -qO- https://github.com/usbarmory/tamago-go/archive/refs/tags/${TAMAGO_VERSION}.tar.gz | tar xz
+        mv tamago-go-${TAMAGO_VERSION} tamago-go
+        cd tamago-go/src && ./make.bash
+    - name: Build every board support package
+      run: |
+        export GOROOT=$PWD/tamago-go
+        export GOOSPKG=github.com/usbarmory/tamago
+        export GOOS=tamago CGO_ENABLED=0 GO_EXTLINK_ENABLED=0 GOTOOLCHAIN=local
+        go=$GOROOT/bin/go
+        rc=0
+        for board in board/*/*; do
+          [ -d "$board" ] || continue
+          built=""
+          for arch in amd64 arm arm64 riscv64 loong64; do
+            if GOARCH=$arch $go build ./$board >/dev/null 2>&1; then
+              built="$built $arch"
+            fi
+          done
+          if [ -n "$built" ]; then
+            echo "ok   $board:$built"
+          else
+            echo "FAIL $board builds for no GOARCH"
+            for arch in amd64 arm arm64 riscv64 loong64; do
+              GOARCH=$arch $go build ./$board 2>&1 | sed "s/^/     $arch: /"
+            done
+            rc=1
+          fi
+        done
+        exit $rc
