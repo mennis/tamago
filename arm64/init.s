@@ -105,4 +105,20 @@ TEXT ·cpuinit_el1(SB),NOSPLIT|NOFRAME,$0
 	ADD	R1, RSP
 	SUB	R2, RSP
 
+	// Zero the BSS before the runtime touches any global, a loader handed a
+	// raw image rather than an ELF copies text and data only. This runs on
+	// the boot core alone, a secondary core has its own entry point.
+	//
+	// [runtime.bss, runtime.end) covers .bss and .noptrbss and is doubleword
+	// aligned.
+	MOVD	$runtime·bss(SB), R0
+	MOVD	$runtime·end(SB), R1
+bss_zero:
+	CMP	R1, R0
+	BHS	bss_done
+	MOVD	ZR, (R0)
+	ADD	$8, R0, R0
+	B	bss_zero
+bss_done:
+
 	B	_rt0_tamago_start(SB)
