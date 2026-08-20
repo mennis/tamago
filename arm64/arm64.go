@@ -54,5 +54,7 @@ func (cpu *CPU) Init() {
 	goos.Exit = exit
 	goos.Idle = cpu.DefaultIdleGovernor
 
+	assertCacheLineSize()
+
 	cpu.initVectorTable()
 }
