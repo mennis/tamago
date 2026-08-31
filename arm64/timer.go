@@ -94,7 +94,11 @@ func (cpu *CPU) SetAlarm(ns int64) {
 		return
 	}
 
-	set := uint64(ns) / uint64(cpu.TimerMultiplier)
+	// The multiplier is nanoseconds-per-tick and is whole only when CNTFRQ
+	// divides 1e9, so the division is done in float64: uint64() would turn
+	// 41.666 into 41. The deadline is absolute, so the resulting error
+	// scales with the counter rather than with the requested interval.
+	set := uint64(float64(ns) / cpu.TimerMultiplier)
 	now := read_cntpct()
 	cnt := set - now
 
