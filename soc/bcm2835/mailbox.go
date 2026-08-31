@@ -126,7 +126,7 @@ func (mb *mailbox) Call(channel int, message *MailboxMessage) {
 	message.Code = binary.LittleEndian.Uint32(buf[4:])
 	offset = 8
 
-	for offset < len(buf) {
+	for offset+4 <= len(buf) {
 		tag := MailboxTag{}
 		tag.ID = binary.LittleEndian.Uint32(buf[offset:])
 
@@ -135,17 +135,43 @@ func (mb *mailbox) Call(channel int, message *MailboxMessage) {
 			break
 		}
 
-		len := binary.LittleEndian.Uint32(buf[offset+4:])
+		// The end tag is one word and lands at the very end of the buffer,
+		// so the three-word header is only required once the tag is known
+		// not to be the end.
+		if offset+12 > len(buf) {
+			panic("malformed mailbox response, truncated tag header")
+		}
 
-		if len > uint32(size-offset) {
+		tagSize := binary.LittleEndian.Uint32(buf[offset+4:])
+
+		// The third header word carries the response size, with bit 31
+		// set by the firmware on each tag it processed.
+		respCode := binary.LittleEndian.Uint32(buf[offset+8:])
+		respSize := respCode & 0x7FFFFFFF
+
+		// The bound is what follows the header, not what follows the tag,
+		// otherwise copy() below silently truncates instead of panicking.
+		if tagSize > uint32(len(buf)-offset-12) {
 			panic("malformed mailbox response, over-sized tag")
 		}
 
-		tag.Buffer = make([]byte, len)
-		copy(tag.Buffer, buf[offset+12:])
+		if respSize > tagSize {
+			panic("malformed mailbox response, over-sized value")
+		}
 
 		// Move to next tag
-		offset += int(12 + (len+3)&0xFFFFFFFC)
+		next := offset + int(12+(tagSize+3)&0xFFFFFFFC)
+
+		// an unprocessed (e.g. unsupported) tag carries no response
+		if respCode&0x80000000 == 0 {
+			offset = next
+			continue
+		}
+
+		tag.Buffer = make([]byte, respSize)
+		copy(tag.Buffer, buf[offset+12:])
+
+		offset = next
 		message.Tags = append(message.Tags, tag)
 	}
 }
