@@ -8,7 +8,10 @@
 
 package mmucheck
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestArenaFitsReservations checks each platform's layout against the arena it
 // publishes to arm64 as pageTableLimit.
@@ -115,6 +118,98 @@ func TestArenaEnd(t *testing.T) {
 
 			if got <= tc.base {
 				t.Errorf("bound %#x leaves no arena above base %#x", got, tc.base)
+			}
+		})
+	}
+}
+
+// TestValidateLayout covers the conditions that were bare panics inside
+// InitMMU. Each is reachable by an ordinary platform-configuration mistake and
+// each aborts before the exception vectors are installed, so the board that
+// hits one produces no output at all.
+//
+// The accepted case is the shape with the tables relocated below an image
+// linked at ramStart, as that is the layout the panics were reachable from.
+func TestValidateLayout(t *testing.T) {
+	// tables [0x1000, 0x9000), arena from 0x4000; image at 0x80000
+	live := struct{ ramStart, ramEnd, textStart, textEnd, base, next, end uint64 }{
+		ramStart: 0x80000, ramEnd: 0x3b000000,
+		textStart: 0x80000, textEnd: 0x2b4000,
+		base: 0x1000, next: 0x4000, end: 0x9000,
+	}
+
+	if err := ValidateLayout(live.ramStart, live.ramEnd, live.textStart,
+		live.textEnd, live.base, live.next, live.end); err != nil {
+		t.Fatalf("a mappable layout was rejected: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name                                 string
+		ramStart, ramEnd, textStart, textEnd uint64
+		base, next, end                      uint64
+		want                                 string
+	}{
+		{
+			name:     "ram start inside a page",
+			ramStart: 0x80800, ramEnd: 0x3b000000,
+			textStart: 0x80800, textEnd: 0x2b4000,
+			base: 0x1000, next: 0x4000, end: 0x9000,
+			want: "not 4KB-aligned",
+		},
+		{
+			name:     "ram end inside a page",
+			ramStart: 0x80000, ramEnd: 0x3b000800,
+			textStart: 0x80000, textEnd: 0x2b4000,
+			base: 0x1000, next: 0x4000, end: 0x9000,
+			want: "not 4KB-aligned",
+		},
+		{
+			name:     "ram region inverted",
+			ramStart: 0x3b000000, ramEnd: 0x80000,
+			textStart: 0x3b000000, textEnd: 0x3b001000,
+			base: 0x1000, next: 0x4000, end: 0x9000,
+			want: "empty or inverted",
+		},
+		{
+			// the image linked below the region it declares
+			name:     "text starts below RAM",
+			ramStart: 0x80000, ramEnd: 0x3b000000,
+			textStart: 0x40000, textEnd: 0x2b4000,
+			base: 0x1000, next: 0x4000, end: 0x9000,
+			want: "outside the RAM region",
+		},
+		{
+			name:     "text ends above RAM",
+			ramStart: 0x80000, ramEnd: 0x100000,
+			textStart: 0x80000, textEnd: 0x2b4000,
+			base: 0x1000, next: 0x4000, end: 0x9000,
+			want: "outside the RAM region",
+		},
+		{
+			name:     "page table base inside a page",
+			ramStart: 0x80000, ramEnd: 0x3b000000,
+			textStart: 0x80000, textEnd: 0x2b4000,
+			base: 0x1800, next: 0x4000, end: 0x9000,
+			want: "page table base",
+		},
+		{
+			// the shape a too-low link address produces
+			name:     "arena has no room",
+			ramStart: 0x80000, ramEnd: 0x3b000000,
+			textStart: 0x80000, textEnd: 0x2b4000,
+			base: 0x1000, next: 0x9000, end: 0x9000,
+			want: "no early page table space",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateLayout(tc.ramStart, tc.ramEnd, tc.textStart,
+				tc.textEnd, tc.base, tc.next, tc.end)
+			if err == nil {
+				t.Fatal("accepted a layout that cannot be mapped")
+			}
+
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
 		})
 	}

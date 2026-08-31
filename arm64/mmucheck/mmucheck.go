@@ -64,6 +64,37 @@ func ValidateWindows(dmaStart, dmaEnd, resStart, resEnd, lowStart, lowEnd uint64
 	return nil
 }
 
+// ValidateLayout checks the early boot memory layout arm64.InitMMU derives
+// before it commits any of it, so a platform whose image is linked where the
+// page tables cannot fit is told which of the two it got wrong rather than
+// faulting partway through the walk.
+func ValidateLayout(ramStart, ramEnd, textStart, textEnd, base, arenaNext, arenaEnd uint64) error {
+	if !IsBlockAligned(ramStart, block4KB) || !IsBlockAligned(ramEnd, block4KB) {
+		return fmt.Errorf("RAM region [%#x, %#x) is not 4KB-aligned, the walk maps whole pages and cannot express a boundary inside one",
+			ramStart, ramEnd)
+	}
+
+	if ramStart >= ramEnd {
+		return fmt.Errorf("RAM region empty or inverted: [%#x, %#x)", ramStart, ramEnd)
+	}
+
+	if textStart < ramStart || textEnd > ramEnd {
+		return fmt.Errorf("text region [%#x, %#x) is outside the RAM region [%#x, %#x)",
+			textStart, textEnd, ramStart, ramEnd)
+	}
+
+	if !IsBlockAligned(base, block4KB) {
+		return fmt.Errorf("page table base %#x is not 4KB-aligned", base)
+	}
+
+	if arenaNext >= arenaEnd {
+		return fmt.Errorf("no early page table space, the arena [%#x, %#x) is empty; link the image higher in RAM, or relocate the tables with pageTableStart and bound them with pageTableLimit",
+			arenaNext, arenaEnd)
+	}
+
+	return nil
+}
+
 // ValidatePageTables checks that the DMA-coherent window does not cover the
 // page tables at [base, arenaEnd).
 //

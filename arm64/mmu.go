@@ -109,18 +109,8 @@ func (m *mmuMap) init() {
 	ramStart, ramEnd := runtime.MemRegion()
 	textStart, textEnd := runtime.TextRegion()
 
-	if ramStart&(pageTableSize-1) != 0 || ramEnd&(pageTableSize-1) != 0 {
-		panic("RAM region not 4KB aligned")
-	}
-
-	m.ramStart = ramStart
-	m.ramEnd = ramEnd
-	m.textStart = alignDown(textStart, pageTableSize)
-	m.textEnd = alignUp(textEnd, pageTableSize)
-
-	if m.textStart < ramStart || m.textEnd > ramEnd {
-		panic("text region outside RAM")
-	}
+	textStart = alignDown(textStart, pageTableSize)
+	textEnd = alignUp(textEnd, pageTableSize)
 
 	// Every window bound must be a whole page. L3 is the finest level, so a
 	// boundary inside a 4KB page cannot be expressed at all and classifyPage
@@ -134,30 +124,38 @@ func (m *mmuMap) init() {
 		panic("arm64: " + err.Error())
 	}
 
-	m.base = ramStart + defaultPageTableOffset
-	m.arenaEnd = m.textStart
+	base := ramStart + defaultPageTableOffset
+	arenaEnd := textStart
 
 	if pageTableStart != 0 {
-		m.base = pageTableStart
-		m.arenaEnd = mmucheck.ArenaEnd(pageTableStart, pageTableLimit,
-			lowMemStart, lowMemEnd, m.textStart)
+		base = pageTableStart
+		arenaEnd = mmucheck.ArenaEnd(pageTableStart, pageTableLimit,
+			lowMemStart, lowMemEnd, textStart)
 	}
 
-	if m.base&(pageTableSize-1) != 0 {
-		panic("arm64: page table base not 4KB aligned")
-	}
+	arenaNext := base + pageTableArenaOffset
 
-	m.arenaNext = m.base + pageTableArenaOffset
-
-	if m.arenaNext >= m.arenaEnd {
-		panic("empty early page table space; link binary higher in RAM or relocate the tables with pageTableStart")
-	}
-
-	if err := mmucheck.ValidatePageTables(
-		dmaMemStart, dmaMemEnd, m.base, m.arenaEnd,
+	// Nothing is committed to m until the layout is known good, so the checks
+	// above and below are the same ones a platform can run on the host.
+	if err := mmucheck.ValidateLayout(
+		ramStart, ramEnd, textStart, textEnd, base, arenaNext, arenaEnd,
 	); err != nil {
 		panic("arm64: " + err.Error())
 	}
+
+	if err := mmucheck.ValidatePageTables(
+		dmaMemStart, dmaMemEnd, base, arenaEnd,
+	); err != nil {
+		panic("arm64: " + err.Error())
+	}
+
+	m.ramStart = ramStart
+	m.ramEnd = ramEnd
+	m.textStart = textStart
+	m.textEnd = textEnd
+	m.base = base
+	m.arenaEnd = arenaEnd
+	m.arenaNext = arenaNext
 
 	return
 }
