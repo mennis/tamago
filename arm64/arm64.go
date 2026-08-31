@@ -28,6 +28,9 @@ type CPU struct {
 	TimerMultiplier float64
 	// Timer offset in nanoseconds
 	TimerOffset int64
+	// Timer selects the generic timer this core drives, the zero value is
+	// [PhysicalTimer].
+	Timer TimerType
 
 	// see [CPU.Idle] and [CPU.IdleTime]
 	idle uint64
