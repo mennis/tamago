@@ -144,13 +144,22 @@ func (mb *mailbox) Call(channel int, message *MailboxMessage) {
 
 		tagSize := binary.LittleEndian.Uint32(buf[offset+4:])
 
+		// The third header word carries how much the firmware actually
+		// wrote, with bit 31 marking the tag as a response. Sizing the
+		// buffer from it distinguishes a short answer from zero padding.
+		respSize := binary.LittleEndian.Uint32(buf[offset+8:]) & 0x7FFFFFFF
+
 		// The bound is what follows the header, not what follows the tag,
 		// otherwise copy() below silently truncates instead of panicking.
 		if tagSize > uint32(len(buf)-offset-12) {
 			panic("malformed mailbox response, over-sized tag")
 		}
 
-		tag.Buffer = make([]byte, tagSize)
+		if respSize > tagSize {
+			panic("malformed mailbox response, over-sized value")
+		}
+
+		tag.Buffer = make([]byte, respSize)
 		copy(tag.Buffer, buf[offset+12:])
 
 		// Move to next tag
