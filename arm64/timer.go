@@ -33,14 +33,39 @@ const (
 	refFreq int64 = 1e9
 )
 
-// Interrupts
-const TIMER_IRQ = 30
+// Timer interrupts, the private peripheral interrupt (PPI) INTIDs the generic
+// timers raise (ARM IHI 0069G, Table 2-1).
+const (
+	// EL1 physical timer, CNTP
+	PHYSICAL_TIMER_IRQ = 30
+	// EL1 virtual timer, CNTV
+	VIRTUAL_TIMER_IRQ = 27
+
+	// Deprecated: it names one of the two timers while claiming to name the
+	// timer, use [CPU.TimerIRQ].
+	TIMER_IRQ = PHYSICAL_TIMER_IRQ
+)
+
+// TimerType selects which of the two EL1 generic timers a core drives.
+//
+// A compare register compares against its own counter, so the counter, the
+// compare and the PPI have to move together. The physical timer is correct
+// where the payload owns CNTVOFF_EL2; a guest whose host owns it, and will not
+// say what it is, must drive the virtual timer instead.
+type TimerType int
+
+const (
+	PhysicalTimer TimerType = iota
+	VirtualTimer
+)
 
 // defined in timer.s
 func read_cntfrq() uint32
 func write_cntkctl(val uint32)
 func read_cntpct() uint64
 func write_cntptval(val uint32, enable bool)
+func read_cntvct() uint64
+func write_cntvtval(val uint32, enable bool)
 
 // InitGenericTimers initializes ARMv8 Generic Timers.
 func (cpu *CPU) InitGenericTimers(base uint32, freq uint32) {
@@ -63,9 +88,23 @@ func (cpu *CPU) InitGenericTimers(base uint32, freq uint32) {
 	cpu.TimerMultiplier = float64(refFreq) / float64(read_cntfrq())
 }
 
-// Counter returns the CPU Counter-timer Physical Count (CNTPCT).
+// Counter returns the count of the generic timer the core drives, CNTPCT or
+// CNTVCT.
 func (cpu *CPU) Counter() uint64 {
+	if cpu.Timer == VirtualTimer {
+		return read_cntvct()
+	}
+
 	return read_cntpct()
+}
+
+// TimerIRQ returns the PPI INTID raised by the generic timer the core drives.
+func (cpu *CPU) TimerIRQ() int {
+	if cpu.Timer == VirtualTimer {
+		return VIRTUAL_TIMER_IRQ
+	}
+
+	return PHYSICAL_TIMER_IRQ
 }
 
 // GetTime returns the system time in nanoseconds.
@@ -79,14 +118,20 @@ func (cpu *CPU) SetTime(ns int64) {
 		return
 	}
 
-	cpu.TimerOffset = ns - int64(float64(read_cntpct())*cpu.TimerMultiplier)
+	cpu.TimerOffset = ns - int64(float64(cpu.Counter())*cpu.TimerMultiplier)
 }
 
-// SetAlarm sets a physical timer to the absolute time matching the argument
-// nanoseconds value, an interrupt is generated at expiration.
+// SetAlarm sets the generic timer the core drives to the absolute time matching
+// the argument nanoseconds value, an interrupt is generated at expiration.
 func (cpu *CPU) SetAlarm(ns int64) {
+	arm := write_cntptval
+
+	if cpu.Timer == VirtualTimer {
+		arm = write_cntvtval
+	}
+
 	if ns == 0 {
-		write_cntptval(0, false)
+		arm(0, false)
 		return
 	}
 
@@ -99,7 +144,7 @@ func (cpu *CPU) SetAlarm(ns int64) {
 	// 41.666 into 41. The deadline is absolute, so the resulting error
 	// scales with the counter rather than with the requested interval.
 	set := uint64(float64(ns) / cpu.TimerMultiplier)
-	now := read_cntpct()
+	now := cpu.Counter()
 	cnt := set - now
 
 	if set <= now {
@@ -108,7 +153,7 @@ func (cpu *CPU) SetAlarm(ns int64) {
 		cnt = math.MaxInt32
 	}
 
-	write_cntptval(uint32(cnt), true)
+	arm(uint32(cnt), true)
 }
 
 // Idle suspends execution until an interrupt is received tracking idle time

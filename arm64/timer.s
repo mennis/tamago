@@ -49,3 +49,25 @@ TEXT ·write_cntptval(SB),$0-5
 	MSR	R1, CNTP_CTL_EL0
 
 	RET
+
+// func read_cntvct() uint64
+TEXT ·read_cntvct(SB),$0-8
+	// ARM Architecture Reference Manual ARMv8, for ARMv8-A architecture profile
+	// D12.8.29 CNTVCT_EL0, Counter-timer Virtual Count register
+	ISB	SY
+	MRS	CNTVCT_EL0, R0
+	MOVD	R0, ret+0(FP)
+
+	RET
+
+// func write_cntvtval(val uint32, enable bool)
+TEXT ·write_cntvtval(SB),$0-5
+	// ARM Architecture Reference Manual ARMv8, for ARMv8-A architecture profile
+	// D12.8.28 CNTV_TVAL_EL0, Counter-timer Virtual Timer TimerValue register
+	MOVW	val+0(FP), R0
+	MOVB	enable+4(FP), R1
+
+	MSR	R0, CNTV_TVAL_EL0
+	MSR	R1, CNTV_CTL_EL0
+
+	RET
