@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -161,4 +162,78 @@ func TestDecodeMalformed(t *testing.T) {
 			t.Fatal("expected error for response value exceeding tag buffer")
 		}
 	})
+}
+
+// Value accepts only an answered tag in a successful message.
+func TestValue(t *testing.T) {
+	const id = 0x00030047
+	answered := []Tag{{ID: id, Buffer: []byte{3, 0, 0, 0, 0x80, 0xd1, 0xf0, 0x08}}}
+
+	v, err := Value(ResponseSuccess, answered, id, 8)
+	if err != nil || len(v) != 8 || v[4] != 0x80 {
+		t.Fatalf("Value(success, answered) = %v, %v; want the 8-byte value", v, err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		code uint32
+		tags []Tag
+		want string
+	}{
+		{"firmware error", ResponseError, answered, "response code 0x80000001"},
+		{"unprocessed", 0, answered, "response code 0x00000000"},
+		{"missing tag", ResponseSuccess, []Tag{{ID: 0x00030002, Buffer: make([]byte, 8)}}, "missing"},
+		{"short answer", ResponseSuccess, []Tag{{ID: id, Buffer: make([]byte, 4)}}, "answered 4 bytes, want 8"},
+		{"no answer", ResponseSuccess, []Tag{{ID: id, Buffer: nil}}, "answered 0 bytes"},
+	} {
+		if _, err := Value(tc.code, tc.tags, id, 8); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: Value error = %v, want one containing %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// A response with the request bit set on the tag ID still matches the request.
+func TestValueIgnoresResponseBit(t *testing.T) {
+	tags := []Tag{{ID: 0x80030046, Buffer: []byte{0, 0, 8, 0}}}
+	if _, err := Value(ResponseSuccess, tags, 0x00030046, 4); err != nil {
+		t.Errorf("Value with response bit set on tag ID: %v", err)
+	}
+}
+
+// clockValue builds an (id, rate) clock tag value as the firmware writes it.
+func clockValue(id, hz uint32) []byte {
+	v := make([]byte, 8)
+	binary.LittleEndian.PutUint32(v, id)
+	binary.LittleEndian.PutUint32(v[4:], hz)
+	return v
+}
+
+// Clock returns a rate only for the requested clock, the firmware answers an
+// unknown id as a different clock (e.g. 99 as 3, the ARM clock).
+func TestClock(t *testing.T) {
+	if hz, err := Clock(clockValue(3, 1_500_000_000), 3); err != nil || hz != 1_500_000_000 {
+		t.Fatalf("Clock(answered, 3) = %d, %v; want 1500000000", hz, err)
+	}
+
+	// a stopped clock is not an error
+	if hz, err := Clock(clockValue(15, 0), 15); err != nil || hz != 0 {
+		t.Fatalf("Clock(stopped, 15) = %d, %v; want 0, nil", hz, err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value []byte
+		id    uint32
+		want  string
+	}{
+		// firmware responses
+		{"99 masked to ARM", clockValue(3, 1_500_000_000), 99, "clock 99 answered as clock 3"},
+		{"0xffff masked to 0x1f", clockValue(0x1f, 0), 0xffff, "clock 65535 answered as clock 31"},
+		{"all-ones id word", clockValue(0xffffffff, 1_500_000_000), 15, "answered as clock 4294967295"},
+		{"short", make([]byte, 4), 3, "4 bytes, want 8"},
+	} {
+		if hz, err := Clock(tc.value, tc.id); err == nil || hz != 0 || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: Clock = %d, %v; want 0 and an error containing %q", tc.name, hz, err, tc.want)
+		}
+	}
 }

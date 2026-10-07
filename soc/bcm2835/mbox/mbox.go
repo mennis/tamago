@@ -129,3 +129,51 @@ func Decode(buf []byte) (code uint32, tags []Tag, err error) {
 
 	return code, tags, nil
 }
+
+// Response codes written by the firmware into the message header.
+const (
+	ResponseSuccess = 0x80000000
+	ResponseError   = 0x80000001
+)
+
+// Value returns the value buffer of tag id from a decoded response. It returns
+// an error unless the message code is ResponseSuccess and the tag is present
+// with at least want bytes of value, as the firmware reports an unsupported
+// tag with a short response rather than an error.
+func Value(code uint32, tags []Tag, id uint32, want int) ([]byte, error) {
+	if code != ResponseSuccess {
+		return nil, fmt.Errorf("mbox: response code %#08x for tag %#08x, want %#08x", code, id, uint32(ResponseSuccess))
+	}
+
+	for _, tag := range tags {
+		if tag.ID&0x7fffffff != id&0x7fffffff {
+			continue
+		}
+
+		if len(tag.Buffer) < want {
+			return nil, fmt.Errorf("mbox: tag %#08x answered %d bytes, want %d", id, len(tag.Buffer), want)
+		}
+
+		return tag.Buffer, nil
+	}
+
+	return nil, fmt.Errorf("mbox: tag %#08x missing from response", id)
+}
+
+// Clock returns the rate of a clock tag (id, rate) value. It returns an error
+// unless the value answers the requested clock, as the firmware answers an
+// unknown clock id with a different clock and its rate.
+//
+// It must not be used with GET_CLOCK_RATE_MEASURED, whose response does not
+// carry the clock id.
+func Clock(value []byte, id uint32) (hz uint32, err error) {
+	if len(value) < 8 {
+		return 0, fmt.Errorf("mbox: clock value is %d bytes, want 8", len(value))
+	}
+
+	if got := binary.LittleEndian.Uint32(value); got != id {
+		return 0, fmt.Errorf("mbox: clock %d answered as clock %d", id, got)
+	}
+
+	return binary.LittleEndian.Uint32(value[4:]), nil
+}
