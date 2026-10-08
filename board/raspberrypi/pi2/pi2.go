@@ -23,7 +23,11 @@ import (
 
 // On the Raspberry Pi2+ peripheral addresses are remapped from their hardware
 // 'bus' address to the 0x3f000000 'physical' address.
-const peripheralBase = 0x3f000000
+// set as a static initializer, as the runtime reaches the RNG and system
+// timer before Hwinit1
+//
+//go:linkname peripheralBase github.com/usbarmory/tamago/soc/bcm2835.peripheralBase
+var peripheralBase uint32 = 0x3f000000
 
 type board struct{}
 

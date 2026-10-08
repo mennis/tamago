@@ -27,8 +27,10 @@ const refFreq int64 = 1e9
 const DRAM_FLAG_NOCACHE = 0xC0000000
 
 // peripheralBase represents the (remapped) peripheral base address, it varies
-// by model and it is therefore initialized (see Init) by individual board
-// packages.
+// by model and it is therefore set by individual board packages.
+//
+// It must be valid before Init, as the runtime reaches the RNG and the system
+// timer during schedinit, a board package sets it with a static initializer.
 var peripheralBase uint32
 
 // ARM processor instance
