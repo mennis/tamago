@@ -53,7 +53,11 @@ var Mailbox = mailbox{}
 func init() {
 	// We don't use this region for DMA, but dma package provides a convenient
 	// block allocation system.
-	Mailbox.Region, _ = dma.NewRegion(MAILBOX_REGION_BASE|DRAM_FLAG_NOCACHE, MAILBOX_REGION_SIZE, false)
+	var err error
+
+	if Mailbox.Region, err = dma.NewRegion(MAILBOX_REGION_BASE, MAILBOX_REGION_SIZE, false); err != nil {
+		panic("bcm2835: mailbox region init failed: " + err.Error())
+	}
 }
 
 type MailboxTag struct {
@@ -120,7 +124,12 @@ func (mb *mailbox) Call(channel int, message *MailboxMessage) {
 	// terminating null tag
 	binary.LittleEndian.PutUint32(buf[offset:], 0x0)
 
+	// the message is exchanged through memory the VideoCore reads and writes
+	ARM.FlushDataCache()
+
 	mb.exchangeMessage(channel, uint32(addr))
+
+	ARM.FlushDataCache()
 
 	message.Tags = make([]MailboxTag, 0, len(message.Tags))
 	message.Code = binary.LittleEndian.Uint32(buf[4:])
@@ -181,6 +190,9 @@ func (mb *mailbox) exchangeMessage(channel int, addr uint32) {
 		panic("Mailbox message must be 16-byte aligned")
 	}
 
+	// the VideoCore addresses ARM memory through its bus alias
+	busAddr := addr + GPU_BUS_OFFSET
+
 	// For now, hold a global lock so only 1 outstanding mailbox
 	// message at any time.
 	mb.Lock()
@@ -192,7 +204,7 @@ func (mb *mailbox) exchangeMessage(channel int, addr uint32) {
 	}
 
 	// Send
-	reg.Write(peripheralBase+MAILBOX_WRITE_REG, uint32(channel&0xF)|uint32(addr&0xFFFFFFF0))
+	reg.Write(peripheralBase+MAILBOX_WRITE_REG, uint32(channel&0xF)|(busAddr&0xFFFFFFF0))
 
 	// Wait for response
 	for (reg.Read(peripheralBase+MAILBOX_STATUS_REG) & MAILBOX_EMPTY) != 0 {
@@ -206,7 +218,7 @@ func (mb *mailbox) exchangeMessage(channel int, addr uint32) {
 	if (data & 0xF) != uint32(channel&0xF) {
 		panic(fmt.Sprintf("overlapping messages, got response for channel %d, expecting %d", data&0xF, channel&0xF))
 	}
-	if (data & 0xFFFFFFF0) != (addr & 0xFFFFFFF0) {
-		panic(fmt.Sprintf("overlapping messages, got response for channel %d, expecting %d", data&0xFFFFFFF0, addr&0xFFFFFFF0))
+	if (data & 0xFFFFFFF0) != (busAddr & 0xFFFFFFF0) {
+		panic(fmt.Sprintf("overlapping messages, got response for addr 0x%x, expecting 0x%x", data&0xFFFFFFF0, busAddr&0xFFFFFFF0))
 	}
 }
