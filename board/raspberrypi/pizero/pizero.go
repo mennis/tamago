@@ -21,7 +21,11 @@ import (
 	"github.com/usbarmory/tamago/soc/bcm2835"
 )
 
-const peripheralBase = 0x20000000
+// set as a static initializer, as the runtime reaches the RNG and system
+// timer before Hwinit1
+//
+//go:linkname peripheralBase github.com/usbarmory/tamago/soc/bcm2835.peripheralBase
+var peripheralBase uint32 = 0x20000000
 
 type board struct{}
 
