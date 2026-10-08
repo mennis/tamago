@@ -23,7 +23,13 @@ import (
 // nanos - should be same value as arm/timer.go refFreq
 const refFreq int64 = 1e9
 
-// DRAM_FLAG_NOCACHE disables caching by setting to high bits
+// GPU_BUS_OFFSET is the VideoCore bus address of ARM physical address 0.
+const GPU_BUS_OFFSET uint32 = 0xC0000000
+
+// DRAM_FLAG_NOCACHE is GPU_BUS_OFFSET, it is a VideoCore bus alias rather than
+// an ARM cache attribute.
+//
+// Deprecated: use GPU_BUS_OFFSET.
 const DRAM_FLAG_NOCACHE = 0xC0000000
 
 // peripheralBase represents the (remapped) peripheral base address, it varies
