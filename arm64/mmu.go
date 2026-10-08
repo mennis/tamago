@@ -500,6 +500,10 @@ func (m *mmuMap) Init() {
 	// set translation control register
 	write_tcr_el1(tcr)
 
+	// discard stale data cache lines left by firmware before enabling the
+	// MMU and caches, as they would shadow memory written since
+	cache_flush_data()
+
 	// enable MMU
 	set_ttbr0_el1(l1pageTableStart)
 }
