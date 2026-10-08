@@ -146,6 +146,12 @@ definition for the `runtime/goos` overlay:
 * `linkramsize`: exclude `ramSize` from `mem.go`
 * `linkprintk`: exclude `printk` from `console.go`
 
+The following build tag selects an alternative CPU entry point:
+
+* `linkcpuinit`: enable a flat MMU map before the Go runtime starts, required
+  on boards whose cores cannot execute atomic operations with the MMU off
+  (e.g. the Raspberry Pi 2)
+
 Executing
 =========
 
