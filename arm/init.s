@@ -31,7 +31,8 @@ TEXT cpuinit(SB),NOSPLIT|NOFRAME,$0
 
 	BIC	$0x1f, R0
 	ORR	$0x1d3, R0	// AIF masked, SVC mode
-	MOVW	$12(R15), R14	// add lr, pc, #12 (after_eret)
+	// PC reads 8 bytes ahead and three words follow, after_eret is at +8
+	MOVW	$8(R15), R14	// add lr, pc, #8 (after_eret)
 	WORD	$0xe16ff000	// msr SPSR_fsxc, r0
 	WORD	$0xe12ef30e	// msr ELR_hyp, lr
 	WORD	$0xe160006e	// eret
