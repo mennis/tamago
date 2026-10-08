@@ -78,13 +78,24 @@ func (hw *miniUART) Init() {
 
 // TX transmits a single character to the serial port.
 func (hw *miniUART) Tx(c byte) {
-	for {
-		if reg.Read(hw.lsr)&0x20 != 0 {
+	// printk can run before Init, the register addresses are then derived
+	// from the peripheral base, which is set by static initializer.
+	lsr, io := hw.lsr, hw.io
+
+	if lsr == 0 {
+		lsr = PeripheralAddress(AUX_MU_LSR_REG)
+		io = PeripheralAddress(AUX_MU_IO_REG)
+	}
+
+	// The wait is bounded, as the UART might not be configured yet and the
+	// transmitter empty bit is not a reliable pacing signal on BCM2836.
+	for i := 0; i < 1<<20; i++ {
+		if reg.Read(lsr)&0x20 != 0 {
 			break
 		}
 	}
 
-	reg.Write(hw.io, uint32(c))
+	reg.Write(io, uint32(c))
 }
 
 // Write data from buffer to serial port.
