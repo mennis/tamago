@@ -40,9 +40,12 @@ TEXT ·set_ttbr0(SB),NOSPLIT,$0-4
 	MOVW	$1, R0
 	MCR	15, 0, R0, C3, C0, 0
 
-	// enable MMU
+	// enable MMU, with the extended page table format: SCTLR.XP (bit 23)
+	// resets to 0 on ARMv6, selecting the legacy subpage descriptors, and is
+	// reserved as one on ARMv7
 	MRC	15, 0, R0, C1, C0, 0
 	ORR	$1, R0
+	ORR	$1<<23, R0
 	MCR	15, 0, R0, C1, C0, 0
 
 	CALL	·flush_tlb(SB)
