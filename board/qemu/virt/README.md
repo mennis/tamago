@@ -128,9 +128,17 @@ layout:
 | `0x08000000` | GIC distributor (GICv3) |
 | `0x080a0000` | GIC redistributor       |
 | `0x09000000` | PL011 UART (console)    |
+| `0x0a000000` | VirtIO MMIO, 32 x 0x200 |
 | `0x40000000` | DRAM (512 MiB)          |
 
 The core is entered at EL1 with the MMU off, no device tree is passed or used.
+The last 16 MiB of DRAM are reserved for DMA.
+
+The board DRBG is seeded only from the generic timer counter, unless
+`virt.InitEntropy()` finds a VirtIO entropy device in a VirtIO MMIO slot and
+rekeys it (see `virt.RNG`). The call reads every slot, so it requires a machine
+answering the whole VirtIO MMIO window, and only the non-legacy MMIO transport
+is supported.
 
 Compiling
 ---------
@@ -152,6 +160,9 @@ qemu-system-aarch64 \
 	-machine virt,gic-version=3 -cpu cortex-a72 -m 512 \
 	-nographic -no-reboot -kernel example
 ```
+
+An entropy device is added with
+`-global virtio-mmio.force-legacy=false -device virtio-rng-device`.
 
 Loaders taking a raw image must set the initial PC to the ELF entry point, which
 is not at the start of `.text`.

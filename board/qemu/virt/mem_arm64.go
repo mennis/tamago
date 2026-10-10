@@ -17,4 +17,4 @@ import (
 // Applications can override ramSize with the `linkramsize` build tag.
 //
 //go:linkname ramSize runtime/goos.RamSize
-var ramSize uint64 = 0x20000000 // 512MB
+var ramSize uint64 = 0x20000000 - dmaSize // 496MB

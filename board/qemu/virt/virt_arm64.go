@@ -19,6 +19,12 @@ import (
 	_ "unsafe"
 
 	"github.com/usbarmory/tamago/arm64"
+	"github.com/usbarmory/tamago/dma"
+)
+
+const (
+	dmaSize  = 0x1000000 // 16MB
+	dmaStart = 0x40000000 + 0x20000000 - dmaSize
 )
 
 //go:linkname ramStart runtime/goos.RamStart
@@ -50,4 +56,12 @@ func Init() {
 
 	// the counter is already running, only CNTFRQ_EL0 needs reading
 	ARM.InitGenericTimers(0, 0)
+}
+
+func init() {
+	// the DMA region lies above the runtime, where memory is mapped as device
+	ARM.ConfigureMMU(dmaStart, dmaStart+dmaSize, 0, arm64.MemoryAttributes|arm64.TTE_BLOCK)
+
+	// allocate global DMA region
+	dma.Init(dmaStart, dmaSize)
 }
