@@ -10,7 +10,7 @@ Copyright (c) The TamaGo Authors. All Rights Reserved.
 Authors
 =======
 
-tannevaled  
+tannevaled (loong64)  
 https://github.com/tannevaled  
 
 Introduction
@@ -19,9 +19,17 @@ Introduction
 TamaGo is a framework that enables compilation and execution of unencumbered Go
 applications on bare metal processors.
 
-The `virt` package provides support for the QEMU `virt` machine, currently
-targeting [LoongArch](https://www.qemu.org/docs/master/system/loongarch/virt.html)
-(`GOARCH=loong64`) configured with a single core.
+The `virt` package provides support for the QEMU `virt` machine on two
+architectures:
+
+* [LoongArch](https://www.qemu.org/docs/master/system/loongarch/virt.html)
+  (`GOARCH=loong64`), configured with a single core.
+* [arm64](https://www.qemu.org/docs/master/system/arm/virt.html)
+  (`GOARCH=arm64`).
+
+Each architecture has its own section below; the files are selected by their
+`_loong64` / `_arm64` suffixes, so importing the package from either target
+pulls in only that machine's support.
 
 Documentation
 =============
@@ -33,7 +41,9 @@ For more information about TamaGo see its
 [project wiki](https://github.com/usbarmory/tamago/wiki).
 
 For the underlying driver support for this board see package
-[ls3a5000](https://github.com/usbarmory/tamago/tree/master/soc/loongson/ls3a5000).
+[ls3a5000](https://github.com/usbarmory/tamago/tree/master/soc/loongson/ls3a5000)
+(loong64) and package
+[arm64](https://github.com/usbarmory/tamago/tree/master/arm64) (arm64).
 
 The package API documentation can be found on
 [pkg.go.dev](https://pkg.go.dev/github.com/usbarmory/tamago).
@@ -41,12 +51,16 @@ The package API documentation can be found on
 Supported hardware
 ==================
 
-| SoC               | Board                                                                          | SoC package                                                                        | Board package                                                                |
-|-------------------|--------------------------------------------------------------------------------|------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| Loongson 3A5000   | [QEMU virt](https://www.qemu.org/docs/master/system/loongarch/virt.html)       | [ls3a5000](https://github.com/usbarmory/tamago/tree/master/soc/loongson/ls3a5000)  | [qemu/virt](https://github.com/usbarmory/tamago/tree/master/board/qemu/virt) |
+| SoC/CPU         | Board                                                                     | SoC package                                                                       | Board package                                                                |
+|-----------------|---------------------------------------------------------------------------|-----------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| Loongson 3A5000 | [QEMU virt](https://www.qemu.org/docs/master/system/loongarch/virt.html)  | [ls3a5000](https://github.com/usbarmory/tamago/tree/master/soc/loongson/ls3a5000) | [qemu/virt](https://github.com/usbarmory/tamago/tree/master/board/qemu/virt) |
+| Cortex-A72      | [QEMU virt](https://www.qemu.org/docs/master/system/arm/virt.html)        | [arm64](https://github.com/usbarmory/tamago/tree/master/arm64)                    | [qemu/virt](https://github.com/usbarmory/tamago/tree/master/board/qemu/virt) |
+
+LoongArch (`GOARCH=loong64`)
+============================
 
 Compiling
-=========
+---------
 
 Go applications are required to set `GOOSPKG` to the desired
 [runtime/goos](https://github.com/usbarmory/tamago-go/tree/latest/src/runtime/goos)
@@ -72,16 +86,16 @@ the device tree, therefore the text segment must be linked above that region
 (the example above links at 16 MiB).
 
 Build tags
-==========
+----------
 
 The following build tags allow applications to override the package own
 definition for the `runtime/goos` overlay:
 
-* `linkramsize`: exclude `ramSize` from `mem.go`
-* `linkprintk`: exclude `printk` from `console.go`
+* `linkramsize`: exclude `ramSize` from `mem_loong64.go`
+* `linkprintk`: exclude `printk` from `console_loong64.go`
 
 Executing and debugging
-=======================
+-----------------------
 
 The target can be executed under emulation as follows:
 
@@ -102,6 +116,45 @@ can be launched as follows:
 ```sh
 loongarch64-unknown-linux-gnu-gdb -ex "target remote 127.0.0.1:1234" main
 ```
+
+arm64 (`GOARCH=arm64`)
+======================
+
+The arm64 target also runs under hypervisors exposing the same guest physical
+layout:
+
+| Base         | Region                  |
+|--------------|-------------------------|
+| `0x08000000` | GIC distributor (GICv3) |
+| `0x080a0000` | GIC redistributor       |
+| `0x09000000` | PL011 UART (console)    |
+| `0x40000000` | DRAM (512 MiB)          |
+
+The core is entered at EL1 with the MMU off, no device tree is passed or used.
+
+Compiling
+---------
+
+```sh
+GOOS=tamago GOARCH=arm64 GOOSPKG=github.com/usbarmory/tamago \
+  ${TAMAGO} build -ldflags "-T 0x40101000 -R 0x4000" -o example main.go
+```
+
+The `-T` address leaves a page below `.text` for the ELF headers. Linking
+`.text` at `0x40100000` with `-R 0x4000` instead yields a program header with an
+underflowed file offset, which QEMU rejects without any message.
+
+Executing and debugging
+-----------------------
+
+```sh
+qemu-system-aarch64 \
+	-machine virt,gic-version=3 -cpu cortex-a72 -m 512 \
+	-nographic -no-reboot -kernel example
+```
+
+Loaders taking a raw image must set the initial PC to the ELF entry point, which
+is not at the start of `.text`.
 
 License
 =======
